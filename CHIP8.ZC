@@ -2,18 +2,42 @@
 	CHIP-8 Interpreter for ZealOS
 
 	Based on:
+		- https://tobiasvl.github.io/blog/write-a-chip-8-emulator/
 		- https://github.com/jcronenberg/chip8-emu
 		- https://github.com/darius-ilisie/chip8
+		- https://github.com/jpcornwell/chip8-c
+		- https://en.wikipedia.org/wiki/CHIP-8
+		- http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
 */
 
 #define CHIP8_MEM_SIZE		4096
 #define CHIP8_REG_COUNT		16
 #define CHIP8_STACK_SIZE	16
 #define CHIP8_SCREEN_WIDTH	64
-#define CHIP8_SCREEN_HEIGHT 32
+#define CHIP8_SCREEN_HEIGHT	32
 #define CHIP8_SCREEN_SIZE	(CHIP8_SCREEN_WIDTH * CHIP8_SCREEN_HEIGHT)
 #define CHIP8_FONT_SIZE		80
 #define CHIP8_KEYS_NUM		16
+#define CHIP8_PROGRAM_ADDR	0x200
+
+// CHIP-8 Opcode highest nibble
+#define CHIP8_OPCODE_CLR_OR_RET		0x0
+#define CHIP8_OPCODE_JUMP			0x1
+//#define CHIP8_OPCODE_CALL			0x2
+//#define CHIP8_OPCODE_SKIP_EQ_NN		0x3
+//#define CHIP8_OPCODE_SKIP_NEQ_NN	0x4
+//#define CHIP8_OPCODE_SKIP_EQ_VY		0x5
+#define CHIP8_OPCODE_SET_VX			0x6
+#define CHIP8_OPCODE_ADD_VX			0x7
+//...
+//...
+#define CHIP8_OPCODE_SET_I			0xA
+//...
+//...
+#define CHIP8_OPCODE_DRAW			0xD
+//...
+//...
+
 
 U8 chip8_font[CHIP8_FONT_SIZE] = 
 {
@@ -45,31 +69,180 @@ class CChip8
 	U16 index_reg;					// I
 	U8	delay_timer;
 	U8	sound_timer;
-	U8	display[CHIP8_SCREEN_SIZE];
+	U8	display[CHIP8_SCREEN_SIZE]; // bytemap when it should technically be a bitmap :^)
 	U8	keys[CHIP8_KEYS_NUM];
 } chip8;
 
-U0 Chip8Init()
+U0 Chip8Init(U8 *game_data)
 {
 	MemSet(&chip8, 0, sizeof(CChip8));
 	MemCopy(&chip8.memory[0x50], chip8_font, CHIP8_FONT_SIZE);
+	MemCopy(&chip8.memory[CHIP8_PROGRAM_ADDR], game_data, CHIP8_MEM_SIZE - CHIP8_PROGRAM_ADDR);
 	chip8.program_counter = 0x200;
-// read a ROM file bytes to 0x200 up to last 0xFFF spot
-// create our window for drawing the screen
 }
 
-U0 Chip8Cycle()
+U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
 {
+	// draw an N pixels tall sprite from mem[i] to
+	// display at X and Y pos in VX and VY,
+	// flipping 'on' pixels to 'off' during drawing
+	// and setting VF 1 if any flipped
+	// x wraps and is modulo'd
+	// y might wrap, not sure
 
+	U8 row;
+	U8 row_data;
+	U8 i;
+	U8 display_data;
+	U8 x_initial;
+
+	x = x % CHIP8_SCREEN_WIDTH;
+	y = y % CHIP8_SCREEN_HEIGHT;
+	x_initial = x;
+
+	chip8.v_regs[0xF] = 0;
+
+	for (row = 0; row < n; row++)
+	{
+		row_data = sprite[row];
+		for (i = 0; i < 8; i++)
+		{ // for each pixel of row
+			display_data = chip8.display[CHIP8_SCREEN_WIDTH * y + x];
+			if (row_data & 0x80 && display_data)
+			{
+				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 0;
+				chip8.v_regs[0xF] = 1;
+			}
+			else if (row_data & 0x80 && !display_data)
+			{
+				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 1;
+			}
+			row_data <<= 1;
+			if (x++ >= CHIP8_SCREEN_WIDTH)
+			{
+				x = x_initial;	
+				goto jump_y;
+			}				
+		}
+		x = x_initial;//???
+jump_y:
+		if (y++ >= CHIP8_SCREEN_HEIGHT)
+			break;
+	}
+}
+
+Bool Chip8Cycle()
+{ // returns FALSE on bad opcodes to signal program shutdown, TRUE otherwise
+	U16 opcode = chip8.memory[chip8.program_counter] << 8 | chip8.memory[chip8.program_counter + 1];
+	U8 op_type = opcode >> 12;
+	U16 op_nnn = opcode & 0x0FFF; 
+	U8 op_kk = opcode & 0x00FF;
+	U8 op_x = (opcode & 0x0F00) >> 8;
+	U8 op_y = (opcode & 0x00F0) >> 4;
+	U8 op_nibble = opcode & 0x000F;
+	Bool should_increment_pc = TRUE; // for most instructions PC += 2, but not all; controlled by this flag
+	U8 *str;
+
+	switch (op_type)
+	{
+		case CHIP8_OPCODE_CLR_OR_RET:
+			switch (op_kk)
+			{
+				case 0x0E: // CLS
+					MemSet(chip8.display, 0, CHIP8_SCREEN_SIZE); // ?
+					break;
+//				case 0xEE: // RET
+//					break;
+
+			}
+			break;
+
+		case CHIP8_OPCODE_JUMP:
+			should_increment_pc = FALSE;
+			chip8.program_counter = op_nnn;
+			break;
+//...
+		case CHIP8_OPCODE_SET_VX:
+			chip8.v_regs[op_x] = op_kk;
+			break;
+
+		case CHIP8_OPCODE_ADD_VX:
+			chip8.v_regs[op_x] += op_kk;
+			break;
+//...
+		case CHIP8_OPCODE_SET_I:
+			chip8.index_reg = op_nnn;
+			break;
+//...
+		case CHIP8_OPCODE_DRAW:
+			Chip8SpriteDraw(chip8.v_regs[op_x], chip8.v_regs[op_y], op_nibble, &chip8.memory[chip8.index_reg]);
+			break;
+
+		default:
+			PopUpOk("Unimplemented opcode :( ");
+			str = MStrPrint("0x%04X @ PC:0x%04X", opcode, chip8.program_counter);
+			PopUpOk(str);
+			Free(str);
+			return FALSE;
+	}
+
+	if (should_increment_pc)
+		chip8.program_counter += 2;
+
+	return TRUE;
+}
+
+U0 DrawIt(CTask *task, CDC *dc)
+{
+	U8 x;
+	U8 y;
+	dc->color = GREEN;
+
+	// draw the screen based on the contents in chip8.display[]
+	for (y = 0; y < CHIP8_SCREEN_HEIGHT; y++)
+	{
+		for (x = 0; x < CHIP8_SCREEN_WIDTH; x++)
+		{
+			if (chip8.display[CHIP8_SCREEN_WIDTH * y + x])
+				GrPlot(dc, x, y);
+		}
+	}
 }
 
 U0 Chip8()
 {
-	Chip8Init;
-	while (TRUE)
+	U8 *filename;
+	U8 *game_data;
+
+	SettingsPush;
+	MenuPush("");
+	DocCursor;
+	WinMax;
+	DocClear;
+
+	do
 	{
-		Chip8Cycle;
+		PopUpOk("$$BK,1$$Double-click or press ESC$$BK,0$$ on a CHIP-8 game file.");
+		filename = PopUpPickFile("~/");
 	}
+	while (IsDir(filename));
+
+	game_data = FileRead(filename);
+	Chip8Init(game_data);
+	Fs->draw_it = &DrawIt;
+	try
+	{
+		while (Chip8Cycle)
+		{
+			// handle keyboard
+			// timers, delay, interpreter speed sync
+			Yield;
+		}
+	}
+	catch
+		PutExcept;
+	SettingsPop;
+	MenuPop;
 }
 
 Chip8;
