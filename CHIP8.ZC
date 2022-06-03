@@ -198,9 +198,9 @@ Bool Chip8Cycle()
 				case 0xEE: // RETURN FROM CALL
 					if (chip8.stack_ptr == 0)
 						PopUpOk("POP from empty stack, stack underflow :( ");
-					chip8.program_counter = chip8.stack[chip8.stack_ptr--];
+					chip8.program_counter = chip8.stack[--chip8.stack_ptr];
 					break;
-				default:
+				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
 //					return FALSE;
 			}
@@ -433,4 +433,3 @@ U0 Chip8()
 }
 
 Chip8;
-
