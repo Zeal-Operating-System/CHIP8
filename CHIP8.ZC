@@ -16,28 +16,64 @@
 #define CHIP8_SCREEN_WIDTH	64
 #define CHIP8_SCREEN_HEIGHT	32
 #define CHIP8_SCREEN_SIZE	(CHIP8_SCREEN_WIDTH * CHIP8_SCREEN_HEIGHT)
-#define CHIP8_FONT_SIZE		80
+#define CHIP8_FONT_HEIGHT	5
+#define CHIP8_FONT_NUM		16 // 0-F, 8x5 font sprites
+#define CHIP8_FONT_SIZE		(CHIP8_FONT_NUM * CHIP8_FONT_HEIGHT)
 #define CHIP8_KEYS_NUM		16
 #define CHIP8_PROGRAM_ADDR	0x200
+#define CHIP8_SPRITE_WIDTH	8
+#define CHIP8_FONT_ADDR		0x50
 
 // CHIP-8 Opcode highest nibble
 #define CHIP8_OPCODE_CLR_OR_RET		0x0
 #define CHIP8_OPCODE_JUMP			0x1
-//#define CHIP8_OPCODE_CALL			0x2
-//#define CHIP8_OPCODE_SKIP_EQ_NN		0x3
-//#define CHIP8_OPCODE_SKIP_NEQ_NN	0x4
-//#define CHIP8_OPCODE_SKIP_EQ_VY		0x5
+#define CHIP8_OPCODE_CALL			0x2
+#define CHIP8_OPCODE_SKIP_EQ_NN		0x3
+#define CHIP8_OPCODE_SKIP_NEQ_NN	0x4
+#define CHIP8_OPCODE_SKIP_EQ_VY		0x5
 #define CHIP8_OPCODE_SET_VX			0x6
 #define CHIP8_OPCODE_ADD_VX			0x7
-//...
-//...
+#define CHIP8_OPCODE_MATH			0x8 // See CHIP8_MATH_* lowest-nibble defines
+#define CHIP8_OPCODE_SKIP_NEQ_VY	0x9
 #define CHIP8_OPCODE_SET_I			0xA
-//...
-//...
+#define CHIP8_OPCODE_JUMP_OFFSET	0xB
+#define CHIP8_OPCODE_RAND			0xC
 #define CHIP8_OPCODE_DRAW			0xD
-//...
-//...
+#define CHIP8_OPCODE_SKIP_KEY		0xE
+#define CHIP8_OPCODE_MISC			0xF // See CHIP8_MISC_* lowest-byte defines
 
+// CHIP-8 8XYn 'math' Opcode lowest nibble
+#define CHIP8_MATH_VX_EQ_VY			0x0
+#define CHIP8_MATH_VX_OR_VY			0x1
+#define CHIP8_MATH_VX_AND_VY		0x2
+#define CHIP8_MATH_VX_XOR_VY		0x3
+#define CHIP8_MATH_VX_PLUS_VY		0x4
+#define CHIP8_MATH_VX_MINUS_VY		0x5
+#define CHIP8_MATH_VX_SHR			0x6
+#define CHIP8_MATH_VX_VY_MINUS_VX	0x7
+#define CHIP8_MATH_VX_SHL			0xE
+
+// CHIP-8 FXnn 'misc' Opcode lowest byte
+#define CHIP8_MISC_VX_TIMER		0x07
+#define CHIP8_MISC_VX_KEY		0x0A
+#define CHIP8_MISC_TIMER_VX		0x15
+#define CHIP8_MISC_SOUND_VX		0x18
+#define CHIP8_MISC_I_PLUS_VX	0x1E
+#define CHIP8_MISC_SET_I_CHAR	0x29
+#define CHIP8_MISC_BCD			0x33
+#define CHIP8_MISC_REGS_STORE	0x55
+#define CHIP8_MISC_REGS_LOAD	0x65
+
+// CHIP-48 and SUPER-CHIP in 1990s changed a few instructions slightly.
+// Set this to FALSE to run pre-90s CHIP-8 programs.
+#define CHIP8_POST_1990	TRUE
+
+// Original CHIP-8 didn't set VF reg on I reg overflow,
+// but Amiga CHIP-8 interpreter did, and at least
+// one known game "Spacefight 2091!" requires this.
+// Not required/expected for most other programs, and
+// one known game "Animal Race" requires not to check.
+#define CHIP8_INDEX_OVERFLOW_CHECK	FALSE
 
 U8 chip8_font[CHIP8_FONT_SIZE] = 
 {
@@ -76,19 +112,19 @@ class CChip8
 U0 Chip8Init(U8 *game_data)
 {
 	MemSet(&chip8, 0, sizeof(CChip8));
-	MemCopy(&chip8.memory[0x50], chip8_font, CHIP8_FONT_SIZE);
+	MemCopy(&chip8.memory[CHIP8_FONT_ADDR], chip8_font, CHIP8_FONT_SIZE);
 	MemCopy(&chip8.memory[CHIP8_PROGRAM_ADDR], game_data, CHIP8_MEM_SIZE - CHIP8_PROGRAM_ADDR);
-	chip8.program_counter = 0x200;
+	chip8.program_counter = CHIP8_PROGRAM_ADDR;
 }
 
 U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
-{
-	// draw an N pixels tall sprite from mem[i] to
+{	// Draw an N pixels tall sprite from mem[i] to
 	// display at X and Y pos in VX and VY,
 	// flipping 'on' pixels to 'off' during drawing
-	// and setting VF 1 if any flipped
-	// x wraps and is modulo'd
-	// y might wrap, not sure
+	// and setting VF 1 if any flipped.
+	// X and Y start positions wrap via modulo.
+	// While drawing, X screen wrap skips line,
+	// Y screen wrap halts drawing early.
 
 	U8 row;
 	U8 row_data;
@@ -105,30 +141,38 @@ U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
 	for (row = 0; row < n; row++)
 	{
 		row_data = sprite[row];
-		for (i = 0; i < 8; i++)
+
+		for (i = 0; i < CHIP8_SPRITE_WIDTH; i++)
 		{ // for each pixel of row
 			display_data = chip8.display[CHIP8_SCREEN_WIDTH * y + x];
+
 			if (row_data & 0x80 && display_data)
-			{
+			{ // if current highest sprite bit is set and display pixel set, flip and set flag reg
 				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 0;
 				chip8.v_regs[0xF] = 1;
 			}
-			else if (row_data & 0x80 && !display_data)
-			{
+			else if (row_data & 0x80 && !display_data) // else just set the display pixel
 				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 1;
-			}
-			row_data <<= 1;
+
+			row_data <<= 1; // shift the sprite bit data over one
+
 			if (x++ >= CHIP8_SCREEN_WIDTH)
-			{
-				x = x_initial;	
 				goto jump_y;
-			}				
 		}
-		x = x_initial;//???
 jump_y:
+		x = x_initial;
 		if (y++ >= CHIP8_SCREEN_HEIGHT)
 			break;
 	}
+}
+
+U0 Chip8OpcodeWarn(U16 opcode, U16 program_counter)
+{
+	U8 *str = MStrPrint("0x%04X @ PC:0x%04X", opcode, program_counter);
+
+	PopUpOk("Unimplemented opcode :( ");
+	PopUpOk(str);
+	Free(str);
 }
 
 Bool Chip8Cycle()
@@ -141,19 +185,24 @@ Bool Chip8Cycle()
 	U8 op_y = (opcode & 0x00F0) >> 4;
 	U8 op_nibble = opcode & 0x000F;
 	Bool should_increment_pc = TRUE; // for most instructions PC += 2, but not all; controlled by this flag
-	U8 *str;
+	U8 i;
 
 	switch (op_type)
 	{
 		case CHIP8_OPCODE_CLR_OR_RET:
 			switch (op_kk)
 			{
-				case 0x0E: // CLS
-					MemSet(chip8.display, 0, CHIP8_SCREEN_SIZE); // ?
+				case 0xE0: // CLEAR SCREEN
+					MemSet(chip8.display, 0, CHIP8_SCREEN_SIZE);
 					break;
-//				case 0xEE: // RET
-//					break;
-
+				case 0xEE: // RETURN FROM CALL
+					if (chip8.stack_ptr == 0)
+						PopUpOk("POP from empty stack, stack underflow :( ");
+					chip8.program_counter = chip8.stack[chip8.stack_ptr--];
+					break;
+				default:
+					Chip8OpcodeWarn(opcode, chip8.program_counter);
+//					return FALSE;
 			}
 			break;
 
@@ -161,7 +210,30 @@ Bool Chip8Cycle()
 			should_increment_pc = FALSE;
 			chip8.program_counter = op_nnn;
 			break;
-//...
+
+		case CHIP8_OPCODE_CALL:
+			if (chip8.stack_ptr >= 16)
+				PopUpOk("PUSH onto full stack, stack overflow :( ");
+			should_increment_pc = FALSE;
+			chip8.stack[chip8.stack_ptr++] = chip8.program_counter;
+			chip8.program_counter = op_nnn;
+			break;
+
+		case CHIP8_OPCODE_SKIP_EQ_NN:
+			if (chip8.v_regs[op_x] == op_kk)
+				chip8.program_counter += 2;
+			break;
+
+		case CHIP8_OPCODE_SKIP_NEQ_NN:
+			if (chip8.v_regs[op_x] != op_kk)
+				chip8.program_counter += 2;
+			break;
+
+		case CHIP8_OPCODE_SKIP_EQ_VY:
+			if (chip8.v_regs[op_x] == chip8.v_regs[op_y])
+				chip8.program_counter += 2;
+			break;
+
 		case CHIP8_OPCODE_SET_VX:
 			chip8.v_regs[op_x] = op_kk;
 			break;
@@ -169,21 +241,143 @@ Bool Chip8Cycle()
 		case CHIP8_OPCODE_ADD_VX:
 			chip8.v_regs[op_x] += op_kk;
 			break;
-//...
+
+		case CHIP8_OPCODE_MATH:
+			switch (op_nibble)
+			{
+				case CHIP8_MATH_VX_EQ_VY:
+					chip8.v_regs[op_x] = chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_OR_VY:
+					chip8.v_regs[op_x] |= chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_AND_VY:
+					chip8.v_regs[op_x] &= chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_XOR_VY:
+					chip8.v_regs[op_x] ^= chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_PLUS_VY:
+					if (chip8.v_regs[op_x] + chip8.v_regs[op_y] > 0xFF)
+						chip8.v_regs[0xF] = 1;
+					else
+						chip8.v_regs[0xF] = 0;
+					chip8.v_regs[op_x] += chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_MINUS_VY:
+					if ((chip8.v_regs[op_x] - chip8.v_regs[op_y])(I64) < 0)
+						chip8.v_regs[0xF] = 0;
+					else
+						chip8.v_regs[0xF] = 1;
+					chip8.v_regs[op_x] -= chip8.v_regs[op_y];
+					break;
+				case CHIP8_MATH_VX_SHR:
+					if (!CHIP8_POST_1990)
+						chip8.v_regs[op_x] = chip8.v_regs[op_y];
+					chip8.v_regs[0xF] = chip8.v_regs[op_x] & 1;
+					chip8.v_regs[op_x] >>= 1;
+					break;
+				case CHIP8_MATH_VX_VY_MINUS_VX:
+					if (chip8.v_regs[op_x] > chip8.v_regs[op_y])
+						chip8.v_regs[0xF] = 0;
+					else
+						chip8.v_regs[0xF] = 1;
+					chip8.v_regs[op_x] = chip8.v_regs[op_y] - chip8.v_regs[op_x];
+					break;
+				case CHIP8_MATH_VX_SHL:
+					if (!CHIP8_POST_1990)
+						chip8.v_regs[op_x] = chip8.v_regs[op_y];
+					chip8.v_regs[0xF] = chip8.v_regs[op_x] >> 7;
+					chip8.v_regs[op_x] <<= 1;
+					break;
+				default:
+					Chip8OpcodeWarn(opcode, chip8.program_counter);
+//					return FALSE;
+			}
+			break;
+
+		case CHIP8_OPCODE_SKIP_NEQ_VY:
+			if (chip8.v_regs[op_x] != chip8.v_regs[op_y])
+				chip8.program_counter += 2;
+			break;
+
 		case CHIP8_OPCODE_SET_I:
 			chip8.index_reg = op_nnn;
 			break;
-//...
+
+		case CHIP8_OPCODE_JUMP_OFFSET:
+			if (!CHIP8_POST_1990)
+				chip8.program_counter = op_nnn + chip8.v_regs[0x0];
+			else
+				chip8.program_counter = op_nnn + chip8.v_regs[op_x];
+			break;
+
+		case CHIP8_OPCODE_RAND:
+			chip8.v_regs[op_x] = RandU8 & op_kk;
+			break;
+
 		case CHIP8_OPCODE_DRAW:
 			Chip8SpriteDraw(chip8.v_regs[op_x], chip8.v_regs[op_y], op_nibble, &chip8.memory[chip8.index_reg]);
 			break;
 
+// TODO: implement keyboard
+//		case CHIP8_OPCODE_SKIP_KEY:
+//			break;
+
+		case CHIP8_OPCODE_MISC:
+			switch (op_kk)
+			{
+				case CHIP8_MISC_VX_TIMER:
+					chip8.v_regs[op_x] = chip8.delay_timer;
+					break;
+// TODO: implement keyboard
+//				case CHIP8_MISC_VX_KEY:
+//					break;
+				case CHIP8_MISC_TIMER_VX:
+					chip8.delay_timer = chip8.v_regs[op_x];
+					break;
+// TODO: implement beeping based on sound timer value
+				case CHIP8_MISC_SOUND_VX:
+					chip8.sound_timer = chip8.v_regs[op_x];
+					break;
+				case CHIP8_MISC_I_PLUS_VX:
+					if (CHIP8_INDEX_OVERFLOW_CHECK)
+						if (chip8.index_reg + chip8.v_regs[op_x] > 0xFFF)
+							chip8.v_regs[0xF] = 1;
+						else
+							chip8.v_regs[0xF] = 0;
+					chip8.index_reg += chip8.v_regs[op_x];
+					break;
+				case CHIP8_MISC_SET_I_CHAR:
+					chip8.index_reg = CHIP8_FONT_ADDR + chip8.v_regs[op_x & 0xF] * CHIP8_FONT_HEIGHT;
+					break;
+				case CHIP8_MISC_BCD:
+					chip8.memory[chip8.index_reg] = chip8.v_regs[op_x] / 100;
+					chip8.memory[chip8.index_reg + 1] = (chip8.v_regs[op_x] / 10) % 10;
+					chip8.memory[chip8.index_reg + 2] = chip8.v_regs[op_x] % 10;
+					break;
+				case CHIP8_MISC_REGS_STORE:
+					for (i = 0; i <= op_x; i++)
+						chip8.memory[chip8.index_reg + i] = chip8.v_regs[i];
+					if (!CHIP8_POST_1990)
+						chip8.index_reg += op_x + 1;
+					break;
+				case CHIP8_MISC_REGS_LOAD:
+					for (i = 0; i <= op_x; i++)
+						chip8.v_regs[i] = chip8.memory[chip8.index_reg + i];
+					if (!CHIP8_POST_1990)
+						chip8.index_reg += op_x + 1;
+					break;
+				default:
+					Chip8OpcodeWarn(opcode, chip8.program_counter);
+//					return FALSE;
+
+			}
+			break;
+
 		default:
-			PopUpOk("Unimplemented opcode :( ");
-			str = MStrPrint("0x%04X @ PC:0x%04X", opcode, chip8.program_counter);
-			PopUpOk(str);
-			Free(str);
-			return FALSE;
+			Chip8OpcodeWarn(opcode, chip8.program_counter);
+//			return FALSE;
 	}
 
 	if (should_increment_pc)
@@ -198,15 +392,10 @@ U0 DrawIt(CTask *task, CDC *dc)
 	U8 y;
 	dc->color = GREEN;
 
-	// draw the screen based on the contents in chip8.display[]
 	for (y = 0; y < CHIP8_SCREEN_HEIGHT; y++)
-	{
 		for (x = 0; x < CHIP8_SCREEN_WIDTH; x++)
-		{
 			if (chip8.display[CHIP8_SCREEN_WIDTH * y + x])
-				GrPlot(dc, x, y);
-		}
-	}
+				GrRect(dc, x * 4, y * 4, 4, 4);
 }
 
 U0 Chip8()
@@ -222,7 +411,7 @@ U0 Chip8()
 
 	do
 	{
-		PopUpOk("$$BK,1$$Double-click or press ESC$$BK,0$$ on a CHIP-8 game file.");
+		PopUpOk("\n   $$BK,1$$Double-click or press ESC$$BK,0$$ on a CHIP-8 game file.   ");
 		filename = PopUpPickFile("~/");
 	}
 	while (IsDir(filename));
@@ -231,14 +420,12 @@ U0 Chip8()
 	Chip8Init(game_data);
 	Fs->draw_it = &DrawIt;
 	try
-	{
 		while (Chip8Cycle)
 		{
-			// handle keyboard
-			// timers, delay, interpreter speed sync
+			// TODO: implement keyboard
+			// TODO: timers, delay, interpreter speed sync
 			Yield;
 		}
-	}
 	catch
 		PutExcept;
 	SettingsPop;
@@ -246,3 +433,4 @@ U0 Chip8()
 }
 
 Chip8;
+
