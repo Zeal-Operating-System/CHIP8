@@ -23,6 +23,7 @@
 #define CHIP8_PROGRAM_ADDR	0x200
 #define CHIP8_SPRITE_WIDTH	8
 #define CHIP8_FONT_ADDR		0x50
+#define CHIP8_PIXEL_SCALE	5
 
 // CHIP-8 Opcode highest nibble
 #define CHIP8_OPCODE_CLR_OR_RET		0x0
@@ -66,14 +67,14 @@
 
 // CHIP-48 and SUPER-CHIP in 1990s changed a few instructions slightly.
 // Set this to FALSE to run pre-90s CHIP-8 programs.
-#define CHIP8_POST_1990	TRUE
+#define CHIP8_POST_1990	FALSE
 
 // Original CHIP-8 didn't set VF reg on I reg overflow,
 // but Amiga CHIP-8 interpreter did, and at least
 // one known game "Spacefight 2091!" requires this.
 // Not required/expected for most other programs, and
 // one known game "Animal Race" requires not to check.
-#define CHIP8_INDEX_OVERFLOW_CHECK	FALSE
+#define CHIP8_INDEX_OVERFLOW_CHECK	TRUE
 
 U8 chip8_font[CHIP8_FONT_SIZE] = 
 {
@@ -108,6 +109,34 @@ class CChip8
 	U8	display[CHIP8_SCREEN_SIZE]; // bytemap when it should technically be a bitmap :^)
 	U8	keys[CHIP8_KEYS_NUM];
 } chip8;
+
+// Keyboard scancode values.       Original:  Modern representation:
+// Original COSMAC VIP and HP48     1 2 3 C    1 2 3 4
+// used a unique key layout, with   4 5 6 D    Q W E R
+// keys for 0-9 and A-F.            7 8 9 E    A S D F
+// Modern interpreter practice is   A 0 B F    Z X C V
+// to use 4x4 square starting at
+// key '1' and ending at key 'V'.
+
+// If using a different keyboard layout,
+// or if you want to customize the keybinds,
+// you can change the ' ' char value here.
+I64 sc_1 = Char2ScanCode('1');
+I64 sc_2 = Char2ScanCode('2');
+I64 sc_3 = Char2ScanCode('3');
+I64 sc_4 = Char2ScanCode('4');
+I64 sc_q = Char2ScanCode('q');
+I64 sc_w = Char2ScanCode('w');
+I64 sc_e = Char2ScanCode('e');
+I64 sc_r = Char2ScanCode('r');
+I64 sc_a = Char2ScanCode('a');
+I64 sc_s = Char2ScanCode('s');
+I64 sc_d = Char2ScanCode('d');
+I64 sc_f = Char2ScanCode('f');
+I64 sc_z = Char2ScanCode('z');
+I64 sc_x = Char2ScanCode('x');
+I64 sc_c = Char2ScanCode('c');
+I64 sc_v = Char2ScanCode('v');
 
 U0 Chip8Init(U8 *game_data)
 {
@@ -146,20 +175,20 @@ U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
 		{ // for each pixel of row
 			display_data = chip8.display[CHIP8_SCREEN_WIDTH * y + x];
 
-			if (row_data & 0x80 && display_data)
-			{ // if current highest sprite bit is set and display pixel set, flip and set flag reg
+			if (row_data & 0x80 && !display_data) // if current highest sprite bit is set and display pixel NOT set, set pixel
+				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 1;
+			else if (row_data & 0x80 && display_data) // else flip and set flag reg
+			{
 				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 0;
 				chip8.v_regs[0xF] = 1;
 			}
-			else if (row_data & 0x80 && !display_data) // else just set the display pixel
-				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 1;
 
 			row_data <<= 1; // shift the sprite bit data over one
 
 			if (x++ >= CHIP8_SCREEN_WIDTH)
-				goto jump_y;
+				goto next_y;
 		}
-jump_y:
+next_y:
 		x = x_initial;
 		if (y++ >= CHIP8_SCREEN_HEIGHT)
 			break;
@@ -168,9 +197,8 @@ jump_y:
 
 U0 Chip8OpcodeWarn(U16 opcode, U16 program_counter)
 {
-	U8 *str = MStrPrint("0x%04X @ PC:0x%04X", opcode, program_counter);
+	U8 *str = MStrPrint("\n Unimplemented opcode :(\n\n  0x%04X @ PC:0x%04X", opcode, program_counter);
 
-	PopUpOk("Unimplemented opcode :( ");
 	PopUpOk(str);
 	Free(str);
 }
@@ -200,7 +228,7 @@ Bool Chip8Cycle()
 						PopUpOk("POP from empty stack, stack underflow :( ");
 					chip8.program_counter = chip8.stack[--chip8.stack_ptr];
 					break;
-				default:
+				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
 //					return FALSE;
 			}
@@ -320,9 +348,22 @@ Bool Chip8Cycle()
 			Chip8SpriteDraw(chip8.v_regs[op_x], chip8.v_regs[op_y], op_nibble, &chip8.memory[chip8.index_reg]);
 			break;
 
-// TODO: implement keyboard
-//		case CHIP8_OPCODE_SKIP_KEY:
-//			break;
+		case CHIP8_OPCODE_SKIP_KEY:
+			switch (op_kk)
+			{
+				case 0x9E: // skip if key is pressed
+					if (chip8.keys[chip8.v_regs[op_x]])
+						chip8.program_counter += 2;
+					break;
+				case 0xA1: // skip if key is NOT pressed
+					if (!chip8.keys[chip8.v_regs[op_x]])
+						chip8.program_counter += 2;
+					break;
+				default:
+					Chip8OpcodeWarn(opcode, chip8.program_counter);
+//					return FALSE;
+			}
+			break;
 
 		case CHIP8_OPCODE_MISC:
 			switch (op_kk)
@@ -330,13 +371,21 @@ Bool Chip8Cycle()
 				case CHIP8_MISC_VX_TIMER:
 					chip8.v_regs[op_x] = chip8.delay_timer;
 					break;
-// TODO: implement keyboard
-//				case CHIP8_MISC_VX_KEY:
-//					break;
+				case CHIP8_MISC_VX_KEY:
+					for (i = 0; i < CHIP8_KEYS_NUM; i++)
+					{
+						if (chip8.keys[i])
+						{
+							chip8.v_regs[op_x] = i;
+							goto next_instruction;
+						}
+					}
+					should_increment_pc = FALSE; // wait until key is pressed to move to next opcode
+next_instruction:
+					break;
 				case CHIP8_MISC_TIMER_VX:
 					chip8.delay_timer = chip8.v_regs[op_x];
 					break;
-// TODO: implement beeping based on sound timer value
 				case CHIP8_MISC_SOUND_VX:
 					chip8.sound_timer = chip8.v_regs[op_x];
 					break;
@@ -386,28 +435,58 @@ Bool Chip8Cycle()
 	return TRUE;
 }
 
+U0 Chip8KeyboardPoll()
+{
+	if (Fs != sys_focus_task)
+		return;
+
+	//poll sc bit downs and set in chip8.keys
+	chip8.keys[0x0] = Bt(kbd.down_bitmap, sc_x);
+	chip8.keys[0x1] = Bt(kbd.down_bitmap, sc_1);
+	chip8.keys[0x2] = Bt(kbd.down_bitmap, sc_2);
+	chip8.keys[0x3] = Bt(kbd.down_bitmap, sc_3);
+	chip8.keys[0x4] = Bt(kbd.down_bitmap, sc_q);
+	chip8.keys[0x5] = Bt(kbd.down_bitmap, sc_w);
+	chip8.keys[0x6] = Bt(kbd.down_bitmap, sc_e);
+	chip8.keys[0x7] = Bt(kbd.down_bitmap, sc_a);
+	chip8.keys[0x8] = Bt(kbd.down_bitmap, sc_s);
+	chip8.keys[0x9] = Bt(kbd.down_bitmap, sc_d);
+	chip8.keys[0xA] = Bt(kbd.down_bitmap, sc_z);
+	chip8.keys[0xB] = Bt(kbd.down_bitmap, sc_c);
+	chip8.keys[0xC] = Bt(kbd.down_bitmap, sc_4);
+	chip8.keys[0xD] = Bt(kbd.down_bitmap, sc_r);
+	chip8.keys[0xE] = Bt(kbd.down_bitmap, sc_f);
+	chip8.keys[0xF] = Bt(kbd.down_bitmap, sc_v);
+	
+}
+
 U0 DrawIt(CTask *task, CDC *dc)
 {
 	U8 x;
 	U8 y;
-	dc->color = GREEN;
 
+	dc->color = WHITE;
 	for (y = 0; y < CHIP8_SCREEN_HEIGHT; y++)
 		for (x = 0; x < CHIP8_SCREEN_WIDTH; x++)
 			if (chip8.display[CHIP8_SCREEN_WIDTH * y + x])
-				GrRect(dc, x * 4, y * 4, 4, 4);
+				GrRect(dc, x * CHIP8_PIXEL_SCALE, y * CHIP8_PIXEL_SCALE, CHIP8_PIXEL_SCALE, CHIP8_PIXEL_SCALE);
 }
 
 U0 Chip8()
 {
 	U8 *filename;
 	U8 *game_data;
+	I64 last_delay_time = counts.jiffies;
+	I64 cycle_count = 0;
 
 	SettingsPush;
 	MenuPush("");
+	Fs->text_attr = BLACK << 4;
 	DocCursor;
-	WinMax;
+//	WinMax; // TODO: make window auto size to a pixel-draw-size define expression, make render size configurable with define
 	DocClear;
+
+	StrCopy(Fs->task_title, "CHIP-8");
 
 	do
 	{
@@ -422,9 +501,18 @@ U0 Chip8()
 	try
 		while (Chip8Cycle)
 		{
-			// TODO: implement keyboard
+			Chip8KeyboardPoll;
+			// TODO: implement beeping based on sound timer value
 			// TODO: timers, delay, interpreter speed sync
-			Yield;
+			if (last_delay_time + 13 < counts.jiffies)
+			{
+				if (chip8.sound_timer > 0)
+					chip8.sound_timer--;
+				if (chip8.delay_timer > 0)
+					chip8.delay_timer--;
+				last_delay_time = counts.jiffies;
+			}
+			Sleep(1);
 		}
 	catch
 		PutExcept;
@@ -433,3 +521,4 @@ U0 Chip8()
 }
 
 Chip8;
+
