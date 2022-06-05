@@ -102,7 +102,11 @@ I64 chip8_screen_scale = 8;
 
 U8 *chip8_game_data;
 
-I64 chip8_last_kb_time = counts.jiffies;
+I64 chip8_last_kb_time;
+
+I64 chip8_color_fg = WHITE;
+I64 chip8_color_bg = BLACK;
+
 
 class CChip8
 {
@@ -252,7 +256,7 @@ Bool Chip8Cycle()
 					break;
 				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
-//					return FALSE;
+					return FALSE;
 			}
 			break;
 
@@ -342,7 +346,7 @@ Bool Chip8Cycle()
 					break;
 				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
-//					return FALSE;
+					return FALSE;
 			}
 			break;
 
@@ -383,7 +387,7 @@ Bool Chip8Cycle()
 					break;
 				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
-//					return FALSE;
+					return FALSE;
 			}
 			break;
 
@@ -441,14 +445,14 @@ next_instruction:
 					break;
 				default:
 					Chip8OpcodeWarn(opcode, chip8.program_counter);
-//					return FALSE;
+					return FALSE;
 
 			}
 			break;
 
 		default:
 			Chip8OpcodeWarn(opcode, chip8.program_counter);
-//			return FALSE;
+			return FALSE;
 	}
 
 	if (should_increment_pc)
@@ -464,12 +468,31 @@ U0 Chip8ScreenScale()
 	Fs->win_bottom = Fs->win_top + (CHIP8_SCREEN_HEIGHT * chip8_screen_scale) / FONT_HEIGHT - 1;
 }
 
+U0 Chip8FilePick()
+{
+	U8 *filename;
+
+	FlushMessages;
+
+	do
+	{
+		PopUpOk("\n   $$BK,1$$Double-click or press ESC$$BK,0$$ on a CHIP-8 game file.   ");
+		filename = PopUpPickFile("~/");
+	}
+	while (IsDir(filename));
+
+	chip8_game_data = FileRead(filename);
+
+	StrCopy(Fs->task_title, "CHIP-8 ");
+	CatPrint(Fs->task_title, StrLastOcc(filename, "/") + 1);
+
+}
+
 U0 Chip8KeyboardPoll()
 {
 	if (Fs != sys_focus_task)
 		return;
 
-	//poll sc bit downs and set in chip8.keys
 	chip8.keys[0x0] = Bt(kbd.down_bitmap, sc_x);
 	chip8.keys[0x1] = Bt(kbd.down_bitmap, sc_1);
 	chip8.keys[0x2] = Bt(kbd.down_bitmap, sc_2);
@@ -490,20 +513,65 @@ U0 Chip8KeyboardPoll()
 	if (Bt(kbd.down_bitmap, SC_ENTER))
 		Chip8Init;
 
-	if (Bt(kbd.down_bitmap, SC_BACKSPACE))
+	if (Bt(kbd.down_bitmap, SC_ESC) && chip8_last_kb_time + 200 < counts.jiffies)
 		Chip8Exit;
 
-	if (Bt(kbd.down_bitmap, SC_SHIFT) && chip8_last_kb_time + 100 < counts.jiffies)
+	if (Bt(kbd.down_bitmap, SC_SHIFT) && chip8_last_kb_time + 200 < counts.jiffies)
 	{
 		chip8_screen_scale++;
 		Chip8ScreenScale;
 		chip8_last_kb_time = counts.jiffies;
 	}
-	if (Bt(kbd.down_bitmap, SC_CTRL) && chip8_last_kb_time + 100 < counts.jiffies)
+	if (Bt(kbd.down_bitmap, SC_CTRL) && chip8_last_kb_time + 200 < counts.jiffies)
 	{
 		if (chip8_screen_scale > 1)
 			chip8_screen_scale--;
 		Chip8ScreenScale;
+		chip8_last_kb_time = counts.jiffies;
+	}
+
+	if (Bt(kbd.down_bitmap, SC_BACKSPACE))
+	{
+		Sleep(150);
+		Chip8FilePick;
+		Chip8Init;
+		chip8_last_kb_time = counts.jiffies;
+	}
+
+	if (Bt(kbd.down_bitmap, SC_CURSOR_UP) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		if (++chip8_color_fg > COLORS_NUM)
+			chip8_color_fg = 0;
+		if (chip8_color_fg == chip8_color_bg)
+			if (++chip8_color_fg > COLORS_NUM)
+				chip8_color_fg = 0;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_CURSOR_DOWN) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		if (--chip8_color_fg < 0)
+			chip8_color_fg = COLORS_NUM - 1;
+		if (chip8_color_fg == chip8_color_bg)
+			if (--chip8_color_fg < 0)
+				chip8_color_fg = COLORS_NUM - 1;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_CURSOR_LEFT) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		if (++chip8_color_bg > COLORS_NUM)
+			chip8_color_bg = 0;
+		if (chip8_color_fg == chip8_color_bg)
+			if (++chip8_color_bg > COLORS_NUM)
+				chip8_color_bg = 0;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_CURSOR_RIGHT) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		if (--chip8_color_bg < 0)
+			chip8_color_bg = COLORS_NUM - 1;
+		if (chip8_color_fg == chip8_color_bg)
+			if (--chip8_color_bg < 0)
+				chip8_color_bg = COLORS_NUM - 1;
 		chip8_last_kb_time = counts.jiffies;
 	}
 }
@@ -513,36 +581,33 @@ U0 DrawIt(CTask *task, CDC *dc)
 	U8 x;
 	U8 y;
 
-	dc->color = WHITE;
 	for (y = 0; y < CHIP8_SCREEN_HEIGHT; y++)
 		for (x = 0; x < CHIP8_SCREEN_WIDTH; x++)
+		{
 			if (chip8.display[CHIP8_SCREEN_WIDTH * y + x])
-				GrRect(dc, x * chip8_screen_scale, y * chip8_screen_scale, chip8_screen_scale, chip8_screen_scale);
+				dc->color = chip8_color_fg;
+			else
+				dc->color = chip8_color_bg;
+
+			GrRect(dc, x * chip8_screen_scale, y * chip8_screen_scale, chip8_screen_scale, chip8_screen_scale);
+		}
 }
 
 U0 Chip8()
 {
-	U8 *filename;
 	I64 last_delay_time = counts.jiffies;
 	I64 cycle_count = 0;
 
 	SettingsPush;
 	MenuPush("");
-	Fs->text_attr = BLACK << 4;
 	DocCursor;
 	DocClear;
 	Chip8ScreenScale;
 	StrCopy(Fs->task_title, "CHIP-8");
 
-	do
-	{
-		PopUpOk("\n   $$BK,1$$Double-click or press ESC$$BK,0$$ on a CHIP-8 game file.   ");
-		filename = PopUpPickFile("~/");
-	}
-	while (IsDir(filename));
-
-	chip8_game_data = FileRead(filename);
+	Chip8FilePick;
 	Chip8Init;
+	chip8_last_kb_time = counts.jiffies;
 	Fs->draw_it = &DrawIt;
 	try
 		while (Chip8Cycle)
@@ -550,6 +615,10 @@ U0 Chip8()
 			Chip8KeyboardPoll;
 			// TODO: implement beeping based on sound timer value
 			// TODO: timers, delay, interpreter speed sync
+			// TODO: record gif of gameplay of functional games
+			// TODO: write readme with full description
+			// TODO: implement multicore (kb poll + draw @ CPU0, CPU1 CHIP-8 cycle)
+			// TODO: add optional SUPER-CHIP support, make screen res dynamic for its hi-res mode
 			if (last_delay_time + 13 < counts.jiffies)
 			{
 				if (chip8.sound_timer > 0)
