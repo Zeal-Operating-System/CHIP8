@@ -107,6 +107,12 @@ I64 chip8_last_kb_time;
 I64 chip8_color_fg = WHITE;
 I64 chip8_color_bg = BLACK;
 
+CTask *chip8_cycle_task;
+
+Bool chip8_is_first_init = TRUE;
+Bool chip8_is_paused = FALSE;  // general interpreter pause
+Bool chip8_is_waiting = FALSE; // used to sync multicore during reset/file change
+Bool chip8_is_bad_opcode = FALSE;
 
 class CChip8
 {
@@ -153,10 +159,20 @@ I64 sc_v = Char2ScanCode('v');
 
 U0 Chip8Init()
 {
+	if (!chip8_is_first_init)
+	{
+		chip8_is_paused = TRUE;
+		chip8_is_waiting = TRUE;
+		while (chip8_is_waiting)
+			Sleep(1); // wait for cycle Task to sync before modifying global vals
+	}
 	MemSet(&chip8, 0, sizeof(CChip8));
 	MemCopy(&chip8.memory[CHIP8_FONT_ADDR], chip8_font, CHIP8_FONT_SIZE);
 	MemCopy(&chip8.memory[CHIP8_PROGRAM_ADDR], chip8_game_data, CHIP8_MEM_SIZE - CHIP8_PROGRAM_ADDR);
 	chip8.program_counter = CHIP8_PROGRAM_ADDR;
+	chip8_is_paused = FALSE;
+	if (chip8_is_first_init)
+		chip8_is_first_init = FALSE;
 }
 
 U0 Chip8Exit()
@@ -217,17 +233,21 @@ next_y:
 	}
 }
 
-U0 Chip8OpcodeWarn(U16 opcode, U16 program_counter)
+U0 Chip8OpcodeWarn()
 {
-	U8 *str = MStrPrint("\n Unimplemented opcode :(\n\n  0x%04X @ PC:0x%04X", opcode, program_counter);
+	U16 opcode = chip8.memory[chip8.program_counter] << 8 | chip8.memory[chip8.program_counter + 1];
+	U8 *str = MStrPrint("\n Unimplemented opcode :(\n\n  0x%04X @ PC:0x%04X", opcode, chip8.program_counter);
 
 	FlushMessages;
-	PopUpOk(str);
+	if (PopUp2("RESET", 1, "CONTINUE", 0, str) > 0)
+		Chip8Init;
 	Free(str);
+	chip8_is_bad_opcode = FALSE;
+	chip8_is_paused = FALSE;
 }
 
 Bool Chip8Cycle()
-{ // returns FALSE on bad opcodes to signal program shutdown, TRUE otherwise
+{ // returns FALSE to signal program shutdown, TRUE otherwise
 	U16 opcode = chip8.memory[chip8.program_counter] << 8 | chip8.memory[chip8.program_counter + 1];
 	U8 op_type = opcode >> 12;
 	U16 op_nnn = opcode & 0x0FFF; 
@@ -240,6 +260,13 @@ Bool Chip8Cycle()
 
 	if (chip8.shutdown_flag)
 		return FALSE;
+
+	if (chip8_is_paused)
+	{
+		if (chip8_is_waiting)
+			chip8_is_waiting = FALSE;
+		return TRUE;
+	}
 
 	switch (op_type)
 	{
@@ -255,8 +282,8 @@ Bool Chip8Cycle()
 					chip8.program_counter = chip8.stack[--chip8.stack_ptr];
 					break;
 				default:
-					Chip8OpcodeWarn(opcode, chip8.program_counter);
-					return FALSE;
+					chip8_is_bad_opcode = TRUE;
+					chip8_is_paused = TRUE;
 			}
 			break;
 
@@ -345,8 +372,8 @@ Bool Chip8Cycle()
 					chip8.v_regs[op_x] <<= 1;
 					break;
 				default:
-					Chip8OpcodeWarn(opcode, chip8.program_counter);
-					return FALSE;
+					chip8_is_bad_opcode = TRUE;
+					chip8_is_paused = TRUE;
 			}
 			break;
 
@@ -386,8 +413,8 @@ Bool Chip8Cycle()
 						chip8.program_counter += 2;
 					break;
 				default:
-					Chip8OpcodeWarn(opcode, chip8.program_counter);
-					return FALSE;
+					chip8_is_bad_opcode = TRUE;
+					chip8_is_paused = TRUE;
 			}
 			break;
 
@@ -444,21 +471,27 @@ next_instruction:
 						chip8.index_reg += op_x + 1;
 					break;
 				default:
-					Chip8OpcodeWarn(opcode, chip8.program_counter);
-					return FALSE;
+					chip8_is_bad_opcode = TRUE;
+					chip8_is_paused = TRUE;
 
 			}
 			break;
 
 		default:
-			Chip8OpcodeWarn(opcode, chip8.program_counter);
-			return FALSE;
+			chip8_is_bad_opcode = TRUE;
+			chip8_is_paused = TRUE;
 	}
 
 	if (should_increment_pc)
 		chip8.program_counter += 2;
 
 	return TRUE;
+}
+
+U0 Chip8CycleTask()
+{
+	while (Chip8Cycle)
+		Sleep(1);
 }
 
 
@@ -483,8 +516,9 @@ U0 Chip8FilePick()
 
 	chip8_game_data = FileRead(filename);
 
-	StrCopy(Fs->task_title, "CHIP-8 ");
+	StrCopy(Fs->task_title, " CHIP-8 ");
 	CatPrint(Fs->task_title, StrLastOcc(filename, "/") + 1);
+	CatPrint(Fs->task_title, " ");
 
 }
 
@@ -510,8 +544,12 @@ U0 Chip8KeyboardPoll()
 	chip8.keys[0xE] = Bt(kbd.down_bitmap, sc_f);
 	chip8.keys[0xF] = Bt(kbd.down_bitmap, sc_v);
 	
-	if (Bt(kbd.down_bitmap, SC_ENTER))
+	if (Bt(kbd.down_bitmap, SC_ENTER) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		chip8_is_paused = TRUE;
 		Chip8Init;
+		chip8_last_kb_time = counts.jiffies;
+	}
 
 	if (Bt(kbd.down_bitmap, SC_ESC) && chip8_last_kb_time + 200 < counts.jiffies)
 		Chip8Exit;
@@ -533,6 +571,7 @@ U0 Chip8KeyboardPoll()
 	if (Bt(kbd.down_bitmap, SC_BACKSPACE))
 	{
 		Sleep(150);
+		chip8_is_paused = TRUE;
 		Chip8FilePick;
 		Chip8Init;
 		chip8_last_kb_time = counts.jiffies;
@@ -574,6 +613,15 @@ U0 Chip8KeyboardPoll()
 				chip8_color_bg = COLORS_NUM - 1;
 		chip8_last_kb_time = counts.jiffies;
 	}
+
+	if (Bt(kbd.down_bitmap, SC_TAB) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		if (chip8_is_paused)
+			chip8_is_paused = FALSE;
+		else
+			chip8_is_paused = TRUE;
+		chip8_last_kb_time = counts.jiffies;
+	}
 }
 
 U0 DrawIt(CTask *task, CDC *dc)
@@ -591,34 +639,49 @@ U0 DrawIt(CTask *task, CDC *dc)
 
 			GrRect(dc, x * chip8_screen_scale, y * chip8_screen_scale, chip8_screen_scale, chip8_screen_scale);
 		}
+
+	if (chip8_is_paused && Blink)
+	{
+		dc->color = chip8_color_fg;
+		GrRect(dc, 0, 0, FONT_WIDTH * 10, FONT_HEIGHT * 3);
+		dc->color = chip8_color_bg;
+		GrPrint(dc, FONT_WIDTH * 2, FONT_HEIGHT, "PAUSED");
+	}
 }
 
 U0 Chip8()
 {
 	I64 last_delay_time = counts.jiffies;
 	I64 cycle_count = 0;
+	I64 cycle_cpu = MinI64(1, mp_count - 1);
 
 	SettingsPush;
 	MenuPush("");
 	DocCursor;
 	DocClear;
 	Chip8ScreenScale;
-	StrCopy(Fs->task_title, "CHIP-8");
+	StrCopy(Fs->task_title, " CHIP-8 ");
 
 	Chip8FilePick;
 	Chip8Init;
 	chip8_last_kb_time = counts.jiffies;
 	Fs->draw_it = &DrawIt;
+	chip8_cycle_task = Spawn(&Chip8CycleTask,, "CHIP-8 Cycle Task", cycle_cpu);
 	try
-		while (Chip8Cycle)
+		while (TRUE)
 		{
-			Chip8KeyboardPoll;
+			if (!TaskValidate(chip8_cycle_task))
+				break;
+
+			if (chip8_is_bad_opcode)
+				Chip8OpcodeWarn;
+
+			if (last_delay_time + 10 < counts.jiffies)
+				Chip8KeyboardPoll;
 			// TODO: implement beeping based on sound timer value
-			// TODO: timers, delay, interpreter speed sync
-			// TODO: record gif of gameplay of functional games
-			// TODO: write readme with full description
-			// TODO: implement multicore (kb poll + draw @ CPU0, CPU1 CHIP-8 cycle)
-			// TODO: add optional SUPER-CHIP support, make screen res dynamic for its hi-res mode
+			// TODO: adjustable cycle timer, adjustable delay timer
+			// TODO: add SUPER-CHIP support, make screen res dynamic for its hi-res mode
+			// TODO: implement debugger
 			if (last_delay_time + 13 < counts.jiffies)
 			{
 				if (chip8.sound_timer > 0)
@@ -630,7 +693,11 @@ U0 Chip8()
 			Sleep(1);
 		}
 	catch
+	{
+		if (TaskValidate(chip8_cycle_task))
+			Kill(chip8_cycle_task);
 		PutExcept;
+	}
 	SettingsPop;
 	MenuPop;
 	FlushMessages;
