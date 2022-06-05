@@ -10,6 +10,20 @@
 		- http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
 */
 
+
+// Set this to FALSE to run pre-90s CHIP-8 programs!
+// CHIP-48 and SUPER-CHIP in 1990s changed a few instructions slightly.
+#define CHIP8_POST_1990	TRUE
+
+
+// Original CHIP-8 didn't set VF reg on I reg overflow,
+// but Amiga CHIP-8 interpreter did, and at least
+// one known game "Spacefight 2091!" requires this.
+// Not required/expected for most other programs, and
+// one known game "Animal Race" requires not to check.
+#define CHIP8_INDEX_OVERFLOW_CHECK	FALSE
+
+
 #define CHIP8_MEM_SIZE		4096
 #define CHIP8_REG_COUNT		16
 #define CHIP8_STACK_SIZE	16
@@ -23,7 +37,6 @@
 #define CHIP8_PROGRAM_ADDR	0x200
 #define CHIP8_SPRITE_WIDTH	8
 #define CHIP8_FONT_ADDR		0x50
-#define CHIP8_PIXEL_SCALE	5
 
 // CHIP-8 Opcode highest nibble
 #define CHIP8_OPCODE_CLR_OR_RET		0x0
@@ -65,17 +78,6 @@
 #define CHIP8_MISC_REGS_STORE	0x55
 #define CHIP8_MISC_REGS_LOAD	0x65
 
-// CHIP-48 and SUPER-CHIP in 1990s changed a few instructions slightly.
-// Set this to FALSE to run pre-90s CHIP-8 programs.
-#define CHIP8_POST_1990	FALSE
-
-// Original CHIP-8 didn't set VF reg on I reg overflow,
-// but Amiga CHIP-8 interpreter did, and at least
-// one known game "Spacefight 2091!" requires this.
-// Not required/expected for most other programs, and
-// one known game "Animal Race" requires not to check.
-#define CHIP8_INDEX_OVERFLOW_CHECK	TRUE
-
 U8 chip8_font[CHIP8_FONT_SIZE] = 
 {
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -96,6 +98,12 @@ U8 chip8_font[CHIP8_FONT_SIZE] =
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ;
 
+I64 chip8_screen_scale = 8;
+
+U8 *chip8_game_data;
+
+I64 chip8_last_kb_time = counts.jiffies;
+
 class CChip8
 {
 	U8	memory[CHIP8_MEM_SIZE];
@@ -108,6 +116,7 @@ class CChip8
 	U8	sound_timer;
 	U8	display[CHIP8_SCREEN_SIZE]; // bytemap when it should technically be a bitmap :^)
 	U8	keys[CHIP8_KEYS_NUM];
+	U8  shutdown_flag;
 } chip8;
 
 // Keyboard scancode values.       Original:  Modern representation:
@@ -138,12 +147,17 @@ I64 sc_x = Char2ScanCode('x');
 I64 sc_c = Char2ScanCode('c');
 I64 sc_v = Char2ScanCode('v');
 
-U0 Chip8Init(U8 *game_data)
+U0 Chip8Init()
 {
 	MemSet(&chip8, 0, sizeof(CChip8));
 	MemCopy(&chip8.memory[CHIP8_FONT_ADDR], chip8_font, CHIP8_FONT_SIZE);
-	MemCopy(&chip8.memory[CHIP8_PROGRAM_ADDR], game_data, CHIP8_MEM_SIZE - CHIP8_PROGRAM_ADDR);
+	MemCopy(&chip8.memory[CHIP8_PROGRAM_ADDR], chip8_game_data, CHIP8_MEM_SIZE - CHIP8_PROGRAM_ADDR);
 	chip8.program_counter = CHIP8_PROGRAM_ADDR;
+}
+
+U0 Chip8Exit()
+{
+	chip8.shutdown_flag = TRUE;
 }
 
 U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
@@ -171,27 +185,31 @@ U0 Chip8SpriteDraw(U8 x, U8 y, U8 n, U8 *sprite)
 	{
 		row_data = sprite[row];
 
+		if (y >= CHIP8_SCREEN_HEIGHT)
+			break;
+
 		for (i = 0; i < CHIP8_SPRITE_WIDTH; i++)
 		{ // for each pixel of row
 			display_data = chip8.display[CHIP8_SCREEN_WIDTH * y + x];
 
+			if (x >= CHIP8_SCREEN_WIDTH)
+				goto next_y;
+
 			if (row_data & 0x80 && !display_data) // if current highest sprite bit is set and display pixel NOT set, set pixel
 				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 1;
-			else if (row_data & 0x80 && display_data) // else flip and set flag reg
-			{
+			else if (row_data & 0x80 && display_data)
+			{  // else flip and set flag reg
 				chip8.display[CHIP8_SCREEN_WIDTH * y + x] = 0;
 				chip8.v_regs[0xF] = 1;
 			}
 
 			row_data <<= 1; // shift the sprite bit data over one
 
-			if (x++ >= CHIP8_SCREEN_WIDTH)
-				goto next_y;
+			x++;
 		}
 next_y:
 		x = x_initial;
-		if (y++ >= CHIP8_SCREEN_HEIGHT)
-			break;
+		y++;
 	}
 }
 
@@ -199,6 +217,7 @@ U0 Chip8OpcodeWarn(U16 opcode, U16 program_counter)
 {
 	U8 *str = MStrPrint("\n Unimplemented opcode :(\n\n  0x%04X @ PC:0x%04X", opcode, program_counter);
 
+	FlushMessages;
 	PopUpOk(str);
 	Free(str);
 }
@@ -214,6 +233,9 @@ Bool Chip8Cycle()
 	U8 op_nibble = opcode & 0x000F;
 	Bool should_increment_pc = TRUE; // for most instructions PC += 2, but not all; controlled by this flag
 	U8 i;
+
+	if (chip8.shutdown_flag)
+		return FALSE;
 
 	switch (op_type)
 	{
@@ -435,6 +457,13 @@ next_instruction:
 	return TRUE;
 }
 
+
+U0 Chip8ScreenScale()
+{
+	Fs->win_right  = Fs->win_left + (CHIP8_SCREEN_WIDTH * chip8_screen_scale) / FONT_WIDTH  - 1;
+	Fs->win_bottom = Fs->win_top + (CHIP8_SCREEN_HEIGHT * chip8_screen_scale) / FONT_HEIGHT - 1;
+}
+
 U0 Chip8KeyboardPoll()
 {
 	if (Fs != sys_focus_task)
@@ -458,6 +487,25 @@ U0 Chip8KeyboardPoll()
 	chip8.keys[0xE] = Bt(kbd.down_bitmap, sc_f);
 	chip8.keys[0xF] = Bt(kbd.down_bitmap, sc_v);
 	
+	if (Bt(kbd.down_bitmap, SC_ENTER))
+		Chip8Init;
+
+	if (Bt(kbd.down_bitmap, SC_BACKSPACE))
+		Chip8Exit;
+
+	if (Bt(kbd.down_bitmap, SC_SHIFT) && chip8_last_kb_time + 100 < counts.jiffies)
+	{
+		chip8_screen_scale++;
+		Chip8ScreenScale;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_CTRL) && chip8_last_kb_time + 100 < counts.jiffies)
+	{
+		if (chip8_screen_scale > 1)
+			chip8_screen_scale--;
+		Chip8ScreenScale;
+		chip8_last_kb_time = counts.jiffies;
+	}
 }
 
 U0 DrawIt(CTask *task, CDC *dc)
@@ -469,13 +517,12 @@ U0 DrawIt(CTask *task, CDC *dc)
 	for (y = 0; y < CHIP8_SCREEN_HEIGHT; y++)
 		for (x = 0; x < CHIP8_SCREEN_WIDTH; x++)
 			if (chip8.display[CHIP8_SCREEN_WIDTH * y + x])
-				GrRect(dc, x * CHIP8_PIXEL_SCALE, y * CHIP8_PIXEL_SCALE, CHIP8_PIXEL_SCALE, CHIP8_PIXEL_SCALE);
+				GrRect(dc, x * chip8_screen_scale, y * chip8_screen_scale, chip8_screen_scale, chip8_screen_scale);
 }
 
 U0 Chip8()
 {
 	U8 *filename;
-	U8 *game_data;
 	I64 last_delay_time = counts.jiffies;
 	I64 cycle_count = 0;
 
@@ -483,9 +530,8 @@ U0 Chip8()
 	MenuPush("");
 	Fs->text_attr = BLACK << 4;
 	DocCursor;
-//	WinMax; // TODO: make window auto size to a pixel-draw-size define expression, make render size configurable with define
 	DocClear;
-
+	Chip8ScreenScale;
 	StrCopy(Fs->task_title, "CHIP-8");
 
 	do
@@ -495,8 +541,8 @@ U0 Chip8()
 	}
 	while (IsDir(filename));
 
-	game_data = FileRead(filename);
-	Chip8Init(game_data);
+	chip8_game_data = FileRead(filename);
+	Chip8Init;
 	Fs->draw_it = &DrawIt;
 	try
 		while (Chip8Cycle)
@@ -518,6 +564,7 @@ U0 Chip8()
 		PutExcept;
 	SettingsPop;
 	MenuPop;
+	FlushMessages;
 }
 
 Chip8;
