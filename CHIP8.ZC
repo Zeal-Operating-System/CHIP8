@@ -114,6 +114,9 @@ Bool chip8_is_paused = FALSE;  // general interpreter pause
 Bool chip8_is_waiting = FALSE; // used to sync multicore during reset/file change
 Bool chip8_is_bad_opcode = FALSE;
 
+U64 chip8_cycle_speed = 1; // 0 = fast, 1 = normal, 2+ = slow
+U64 chip8_delay_speed = 16; // JIFFY_FREQ/60 = 60fps = 16ms/frame delay&sound timers are updated
+
 class CChip8
 {
 	U8	memory[CHIP8_MEM_SIZE];
@@ -241,6 +244,8 @@ U0 Chip8OpcodeWarn()
 	FlushMessages;
 	if (PopUp2("RESET", 1, "CONTINUE", 0, str) > 0)
 		Chip8Init;
+	else
+		chip8.program_counter += 2;
 	Free(str);
 	chip8_is_bad_opcode = FALSE;
 	chip8_is_paused = FALSE;
@@ -284,6 +289,7 @@ Bool Chip8Cycle()
 				default:
 					chip8_is_bad_opcode = TRUE;
 					chip8_is_paused = TRUE;
+					should_increment_pc = FALSE;
 			}
 			break;
 
@@ -374,6 +380,7 @@ Bool Chip8Cycle()
 				default:
 					chip8_is_bad_opcode = TRUE;
 					chip8_is_paused = TRUE;
+					should_increment_pc = FALSE;
 			}
 			break;
 
@@ -415,6 +422,8 @@ Bool Chip8Cycle()
 				default:
 					chip8_is_bad_opcode = TRUE;
 					chip8_is_paused = TRUE;
+					should_increment_pc = FALSE;
+
 			}
 			break;
 
@@ -473,6 +482,7 @@ next_instruction:
 				default:
 					chip8_is_bad_opcode = TRUE;
 					chip8_is_paused = TRUE;
+					should_increment_pc = FALSE;
 
 			}
 			break;
@@ -480,6 +490,7 @@ next_instruction:
 		default:
 			chip8_is_bad_opcode = TRUE;
 			chip8_is_paused = TRUE;
+			should_increment_pc = FALSE;
 	}
 
 	if (should_increment_pc)
@@ -491,7 +502,7 @@ next_instruction:
 U0 Chip8CycleTask()
 {
 	while (Chip8Cycle)
-		Sleep(1);
+		Sleep(chip8_cycle_speed);
 }
 
 
@@ -622,6 +633,31 @@ U0 Chip8KeyboardPoll()
 			chip8_is_paused = TRUE;
 		chip8_last_kb_time = counts.jiffies;
 	}
+
+	if (Bt(kbd.down_bitmap, SC_F1) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		chip8_cycle_speed = 0;
+		chip8_delay_speed = 8;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_F2) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		chip8_cycle_speed = 1;
+		chip8_delay_speed = 16;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_F3) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		chip8_cycle_speed = 2;
+		chip8_delay_speed = 24;
+		chip8_last_kb_time = counts.jiffies;
+	}
+	if (Bt(kbd.down_bitmap, SC_F4) && chip8_last_kb_time + 200 < counts.jiffies)
+	{
+		chip8_cycle_speed = 4;
+		chip8_delay_speed = 36;
+		chip8_last_kb_time = counts.jiffies;
+	}
 }
 
 U0 DrawIt(CTask *task, CDC *dc)
@@ -675,14 +711,12 @@ U0 Chip8()
 
 			if (chip8_is_bad_opcode)
 				Chip8OpcodeWarn;
-
-			if (last_delay_time + 10 < counts.jiffies)
+			if (last_delay_time + chip8_delay_speed / 2 < counts.jiffies)
 				Chip8KeyboardPoll;
 			// TODO: implement beeping based on sound timer value
-			// TODO: adjustable cycle timer, adjustable delay timer
 			// TODO: add SUPER-CHIP support, make screen res dynamic for its hi-res mode
 			// TODO: implement debugger
-			if (last_delay_time + 13 < counts.jiffies)
+			if (last_delay_time + chip8_delay_speed < counts.jiffies)
 			{
 				if (chip8.sound_timer > 0)
 					chip8.sound_timer--;
@@ -704,4 +738,5 @@ U0 Chip8()
 }
 
 Chip8;
+
 

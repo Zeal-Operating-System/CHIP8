@@ -32,10 +32,13 @@ key '1' and ending at key 'V'.
 |Esc|Exit|
 |Left/Right Arrow Key|Change Foreground Color|
 |Up/Down Arrow Key|Change Background Color|
+|F1|Fast Speed|
+|F2|Normal Speed|
+|F3|Slow Speed|
+|F4|Slower Speed|
 
 ## TODO
 
-- dynamic interpreter cycle/timers speed, adjusting speed with keybinds
 - sound
 - SUPER-CHIP support
 - debugger
