@@ -1,0 +1,84 @@
+Tests made by doodayev
+I took games from the "chip8-roms-master" github https://github.com/kripod/chip8-roms
+and tested them for ZealOS's CHIP-8 emulator https://github.com/Zeal-Operating-System/CHIP8
+
+
+Working games:
+15 Puzzle [Roger Ivie] (alt) (I did not have the patience to solve the puzzle but it "works" lol)
+Addition Problems [Paul C. Moews]
+Airplane  
+Blinky [Hans Christian Egeberg] (WARNING: IDIOT CONTROLS!)
+Blitz [David Winter]
+Biorhythm [Jef Winsor]
+Breakout [Carmelo Cortez, 1979]
+Brix [Andreas Gustaffson, 1990]
+Cave
+Coin Flipping [Carmelo Cortez, 1978] (Bruh, why is this a "game"? You can't even choose how many times it flips)
+Craps [Carmelo Cortez, 1978] (Another bruh moment)
+Deflection [John Fort]
+Figures
+Filter (Slow down the game speed lol)
+Guess [David Winter] (alt) ("Game")
+Guess [David Winter] ("Game")
+Hi-Lo [Jef Winsor, 1978] ("Game")
+Hidden [David Winter, 1996] (Wtf are these controls)
+Kaleidoscope [Joseph Weisbecker. 1978] ("Game", but cool)
+Landing
+Lunar Lander (Udo Pernisz, 1979)
+Merlin [David Winter]
+Missile [David Winter]
+Most Dangerous Game [Peter Maruhnic]
+Nim [Carmelo Cortez, 1978]
+Paddles 
+Pong (1 player)
+Pong (alt)
+Pong 2 (Pong hack) [David Winter, 1997]
+Pong [Paul Vervalin, 1990]
+Puzzle
+Programmable Spacefighters [Jef Winsor]
+Reversi [Philip Baltzer]
+Rocket [Joseph Weisbecker, 1978]
+Rocket Launch [Jonas Lindstedt]
+Rocket Launcher
+Russian Roulette [Carmelo Cortez, 1978] ("Game", almost no animation)
+Shooting Stars [Philip Baltzer, 1978]
+Slide [Joyce Weisbecker, 1978]
+Soccer
+Space Flight
+Space Intercept [Joseph Weisbecker]
+Space Invaders [David Winter]
+Space Invaders [David Winter] (alt)
+Spooky Spot [Joseph Weisbecker, 1978] ("Game", worse than an 8ball)
+Squash [David Winter]
+Submarine [Carmelo Cortez, 1978] (Make sure to turn game speed down)
+Syzygy [Roy Trevino, 1990]
+Tank (Inverted controls)
+Tapeworm [JDR, 1999]
+Tetris [Fran Dachille, 1991]
+Tic-Tac-Toe [David Winter]
+Timebomb ("Game")
+Tron
+UFO [Lutz V, 1992]
+Vers [JMN, 1991]
+Vertical Brix [Paul Robson, 1996]
+Wall [David Winter]
+Wipe Off [Joseph Weisbecker]
+Worm V4 [RB-Revival Studios, 2007]
+X-Mirror ("Game")
+ZeroPong [zeroZshadow, 2007]
+
+
+Not working:
+15 Puzzle [Roger Ivie] 
+Bowling [Gooitzen van der Wal] (Unimplemented opcode)
+Rush Hour [Hap, 2006] (Unimplemented opcode, happens once you select a board)
+
+Buggy/Stupid (Not sure if game is broken, or emulator has problems):
+Animal Race [Brian Astle] (Graphics errors and animals not resetting)
+Astro Dodge [Revival Studios] (Mostly works, but crashes the emulator sometimes)
+Breakout (Brix hack) [David Winter, 1997] (Might be "working as intended", but you have to reset the game to restart)
+Connect 4 [David Winter] (TOO FAST, even when turning to "slowest" speed)
+Mastermind FourRow (Robert Lindley, 1979) (I think it works? Too fast?)
+Sequence Shoot [Joyce Weisbecker] (I read the manual and none of the buttons make the guy shoot even though they should)
+Sum Fun [Joyce Weisbecker] (Too slow to accept inputs)
+ 
